@@ -1,0 +1,86 @@
+# Backend CI — lint + tests on every PR (and on push to master).
+#
+# This is the safety net before Render auto-deploys: nothing in backend/ merges
+# without ruff passing and the pytest suite going green. The frontend has its own
+# workflow; this one only runs when backend code (or this file) changes.
+name: Backend CI
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-ci.yml"
+  push:
+    branches: [master]
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-ci.yml"
+
+# Cancel an in-progress run when new commits are pushed to the same PR/branch —
+# no point finishing CI on a commit that's already been superseded.
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # Real Postgres — with the pgvector extension, which the test harness
+    # (tests/conftest.py) creates before building the schema. Plain `postgres`
+    # would fail on `CREATE EXTENSION vector`. The DB name here must match the
+    # one TEST_DATABASE_URL points at, because conftest connects to an existing
+    # database and only creates the extension + tables inside it.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: life_tracker_test
+        ports:
+          - 5432:5432
+        # Don't start running steps until Postgres actually accepts connections.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      # conftest connects with asyncpg directly, so the scheme must be
+      # postgresql+asyncpg (not bare postgres://).
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/life_tracker_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # uv for fast, lockfile-pinned installs — same tool the Dockerfile uses.
+      # enable-cache caches the uv download cache across runs (torch et al. are
+      # large, so the first run is slow and later ones are quick).
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Match the production image's interpreter (Dockerfile: python:3.13-slim).
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      # --frozen: install exactly what uv.lock pins; fail if it's out of date.
+      - name: Install dependencies
+        run: uv sync --frozen --python 3.13
+
+      # Lint: the project's ruff config selects E, F, I, UP, B (see pyproject).
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Run tests (pytest)
+        run: uv run pytest
