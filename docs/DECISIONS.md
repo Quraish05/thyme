@@ -12,6 +12,103 @@
 
 ---
 
+## 2026-08-07 — K8s / Helm / Jenkins for Thyme: overkill for prod, valuable as a learning sandbox; "manufacture the condition" to learn heavy tools on a small app · _exploring_
+
+**Why:** started from a concrete ask — add Kubernetes via **Helm**, three
+"microservices" (FE, BE, DB) from **Docker images**, following a YouTube 3-tier-web-app
+tutorial. Rather than build it blind, we stepped back to ask whether Thyme is even a
+good candidate. The conversation then broadened to CI/CD, Jenkins, and the underlying
+meta-question: *how do you learn heavyweight DevOps tools without first building a giant
+app that justifies them?* Everything below is the reasoning we agreed on — parked so we
+can pick it up next time K8s/CI/DevOps comes up.
+
+**Q1 — Is Thyme a good Kubernetes candidate?**
+- **For production: no.** It's already right-sized — FE on Vercel, BE on Render, DB on
+  Neon; `render.yaml` auto-deploys on push; free tiers, zero servers to babysit. Nothing
+  here is what K8s exists to solve (many services, autoscaling, self-healing across nodes,
+  fleet rollouts, multi-team ownership). And a database isn't really a "microservice" —
+  running Postgres yourself (StatefulSet + PVC + backups + upgrades) is *more* operational
+  risk than managed Neon, not less. Adopting K8s here would add more ops burden than the
+  rest of the stack combined.
+- **As a learning vehicle: yes — one of the best kinds.** Real (multi-stage Dockerfile,
+  migrations on boot, real secrets, a real build-time gotcha), small enough to hold in your
+  head, local, throwaway, $0. Matches the existing "k8s/ is a learning sandbox, NOT
+  production" framing.
+- **Gotcha to remember when we build it:** `NEXT_PUBLIC_API_URL` is baked into the frontend
+  at *build time* and the **browser** (not the FE pod) calls the backend — so the API URL
+  must be browser-reachable, not in-cluster DNS. Fix in a `kind` sandbox is an **Ingress**
+  (e.g. host `thyme.local`) routing `/` → frontend, `/api` → backend.
+
+**Q2 — Does the sandbox move us off Vercel/Neon/Render, or need a cloud?** No and no.
+The `kind` setup is a *parallel, local* sandbox that never touches production — Vercel/
+Render/Neon stay exactly as they are, and the Postgres pod is a throwaway local DB, never
+the real Neon data. **`kind` = "Kubernetes IN Docker"**: a full cluster running as
+containers inside Docker Desktop on the laptop. **No cloud account, no AWS/GCP/Azure, $0.**
+Only new tools are `kind`, `kubectl` (and later `helm`) — free CLI installs. (Cloud K8s
+like EKS/GKE/AKS is just *managed* K8s, only needed for an always-on public cluster — the
+opposite of what we want.)
+
+**Q3 — Right-sized CI/CD (not overkill)?** Key reframe: **CD already exists** (Render +
+Vercel auto-deploy on push). The real gap is **CI** — nothing checks code before those
+auto-deploys, so a broken PR ships to prod. Backend has `pytest` + `ruff` and a real test
+suite; frontend has `eslint` + `tsc` — all only run when remembered locally. Ladder:
+- *Tier 1 (clear win):* **GitHub Actions CI on PRs** — backend `ruff` + `pytest`; frontend
+  `eslint` + `tsc` + `next build`. Plus **branch protection** (require green before merge —
+  fits the existing PR flow).
+- *Tier 2 (cheap):* **Dependabot** (one YAML, auto dep/security PRs); **gitleaks** secret
+  scanning in CI (there are API keys + OAuth secrets around).
+- *Tier 3 (bridge to K8s):* **build & push Docker images to GHCR** on push — real artifact
+  CD *and* the exact images the `kind` cluster later pulls. Double duty.
+- *Overkill, skip:* ArgoCD/GitOps, multi-env promotion pipelines, Terraform/IaC,
+  semantic-release, self-hosted runners, container-scanning suites.
+
+**Q4 — Jenkins?** Wrong tool for Thyme's *workflow*: it's a **self-hosted CI/CD server** —
+needs an always-on machine you install/patch/secure just to lint & test a solo project,
+when the code already lives on GitHub and GitHub Actions does it with zero infra, free.
+But **legit as a learning track** (still everywhere in enterprises → résumé value), and it
+needs no cloud either — run `jenkins/jenkins:lts` locally in Docker, or later *inside* the
+`kind` cluster, and rebuild the same pipeline to feel *why* the managed approach wins.
+
+**Q5 — How to learn heavy tools on a small app without building a giant product?** The
+chicken-and-egg: these tools are "worthy" only under load/scale/failure/multiplicity/
+change-frequency, which take years to reach organically. **The trick: manufacture the
+condition the tool responds to — locally, synthetically.** The mechanics you exercise are
+identical to production; you just skip the slow organic path.
+- **Traffic** (for autoscaling) → load generator: `k6` / `locust` / `hey` / `wrk`; watch
+  HPA scale pods.
+- **Data volume** (for DB tuning) → seed script + `faker` inserting ~1M rows; learn
+  indexing, slow-query analysis, pooling.
+- **Failure** (for self-healing) → chaos: `kubectl delete pod`, `docker kill db`; watch
+  restarts, retries, circuit breakers.
+- **Many services** (for orchestration) → split the app / add Redis / a worker / a queue.
+  Thyme *already* has a **background job-runner** (recent commit) = a natural 2nd deployable.
+- **Multiple environments** (for promotion) → K8s **namespaces** (dev/staging/prod) in one
+  local cluster — no separate clouds.
+- **A team** (for CI to matter) → be your own team: many small PRs, deliberately break
+  things, watch CI catch them.
+- **Something to observe** → Prometheus + Grafana + synthetic load; trip an alert by
+  killing a pod.
+- **Honest limit:** synthetic gets ~80% (mechanics/muscle memory); the last ~20%
+  (judgment under real stakes — unpredicted traffic, 2am incidents, cost-at-scale, team
+  coordination) only comes from operating something real. That's fine — learn mechanics
+  now, judgment later, arriving with the vocabulary.
+
+**Proposed learning roadmap (sequence, when we pick this up):** (1) GitHub Actions CI —
+backend lint+tests first (most valuable to protect), then frontend; (2) branch protection;
+(3) `faker` seeder + `k6` load script (manufacture scale); (4) add a **frontend Dockerfile**
+(none exists yet — `output: 'standalone'`), then `kind` + **raw manifests** for FE/BE/DB
+(+ job-runner) the tutorial's way, verify FE→BE→DB, incl. the Ingress gotcha above;
+(5) convert those manifests to a **Helm chart** as a second exercise; (6) chaos; (7)
+observability (Prometheus/Grafana); (8) Jenkins as a compare-and-contrast CI track. Do raw
+manifests *before* Helm so the primitives are understood before the templating layer.
+
+**Status:** exploring — nothing built; a shared map to resume from. **Links:** connects to
+2026-07-30 "Reminder dispatch… K8s CronJob rejected for prod / valuable in kind sandbox"
+and the R5 DevOps-track entries below; `render.yaml`; `backend/Dockerfile` (frontend has
+none yet); memory `k8s-learning-sandbox`.
+
+---
+
 ## 2026-08-03 — Notes redesign: single-select folders (+ tags for AI), split Notes/Journal, checklist as a third kind · _decision_
 
 **Why:** redesigning the Notes page from the mockup raised three coupled choices —
