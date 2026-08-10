@@ -1,0 +1,72 @@
+# Build & publish Docker images to GitHub Container Registry (GHCR).
+#
+# Runs after merge to master. Builds the backend and frontend images and pushes
+# them to ghcr.io/quraish05/thyme-{backend,frontend}, tagged `latest` plus the
+# short commit SHA. These are the exact images the future kind/K8s sandbox will
+# pull. Auth uses the built-in GITHUB_TOKEN — no secrets to manage.
+name: Publish images
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - ".github/workflows/publish-images.yml"
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+concurrency:
+  group: publish-images-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write # required to push to GHCR
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            context: backend
+            image: ghcr.io/quraish05/thyme-backend
+          - name: frontend
+            context: frontend
+            image: ghcr.io/quraish05/thyme-frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Generates tags + OCI labels: `latest` (on master) and the short SHA.
+      - name: Derive tags & labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ matrix.image }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+
+      - name: Build & push (${{ matrix.name }})
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
