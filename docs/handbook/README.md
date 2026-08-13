@@ -1,4 +1,4 @@
-# Life Tracker — Engineering Handbook
+# Thyme — Engineering Handbook
 
 > A living book about *how this app actually works* — the implementations, the
 > decisions behind them, and the full-stack learnings picked up building each
@@ -20,8 +20,9 @@ data model → the flow both directions → the tricky part in depth → how to 
 
 ### Part I — Foundations
 - 🚧 **Ch 0. Architecture at a glance** — the stack, the repo layout, how a request travels _(planned)_
-- 🚧 **Ch 1. Auth & sessions** — JWT, the token store, the `CurrentUser` dependency _(planned)_
+- ✅ **[Ch 1. Auth & sessions](10-auth-and-google-sso.md)** — JWT, the token store, the `CurrentUser` dependency, and Google Sign-In: offline ID-token verification, find-or-create by verified email, and the nullable-password user
 - 🚧 **Ch 2. The data model** — users, notes, reminders, and the "log against a day" idea _(planned)_
+- ✅ **[Ch 14. Inside a FastAPI request](11-fastapi-request-journey.md)** — the framework itself, for a newcomer: the middleware/dependency/validation onion, then three real routes traced end to end (a plain write, a `202` hand-off to the job runner, and an SSE stream)
 
 ### Part II — Features
 - ✅ **[Ch 3. Reminders](01-reminders.md)** — time-based nudges, and two independent delivery systems (foreground poll + background Web Push), including the adaptive dispatch loop
@@ -38,13 +39,23 @@ data model → the flow both directions → the tricky part in depth → how to 
 - ✅ **[Ch 7. Real-time live-sync (WebSockets)](02-live-sync-websockets.md)** — one socket per tab, a per-user broadcast registry, and pushing cache-invalidations so a change on one device updates another
 - ✅ **[Ch 8. Observability](03-observability.md)** — structured logging (structlog + stdlib unified), per-request correlation ids, and the liveness/readiness health split
 
+### Part IV — Delivery & infrastructure
+- ✅ **[Ch 15. CI: three GitHub Actions workflows](12-ci-pipelines.md)** — gates vs. producers: `ruff` + `pytest` against a real pgvector Postgres, `eslint` + `tsc` + `next build`, and the matrix job that publishes both images to GHCR
+- ✅ **[Ch 16. Containerizing both apps](13-containerization.md)** — layer-cache ordering, `exec` and PID 1, the Next.js standalone runner, and why `NEXT_PUBLIC_*` is baked in at build time
+- ✅ **[Ch 17. Kubernetes learning sandbox](14-kubernetes-sandbox.md)** — a local `kind` cluster, explicitly not production: Secret + headless Service + StatefulSet/PVC for Postgres, probes, and the level-by-level path to Ingress and Helm
+- 📄 **[Deployment runbook](../deployment.md)** — the actual production path (Vercel + Render + Neon), env-var reference, and known gaps _(not a chapter; kept next door)_
+
 ### Appendices
 - 🚧 **A. Local dev & environment** — running backend + frontend, the shared dev Postgres gotcha _(planned)_
 - 🚧 **B. Testing patterns** — async SQLAlchemy + `httpx.AsyncClient`, and why `TestClient` fights the event loop _(planned)_
 
 ---
 
-**Legend:** ✅ written · 🚧 planned (stub the chapter when you build/learn the thing).
+**Legend:** ✅ written · 🚧 planned (stub the chapter when you build/learn the thing) · 📄 a doc that lives outside the handbook.
+
+**On chapter numbers:** they were assigned in the order chapters were *planned*,
+not written, so a part can read Ch 1 → Ch 14. Read within a part; the number is
+just a stable label.
 
 **Conventions**
 - Code links are relative to this file, so they work on GitHub and in the editor.
