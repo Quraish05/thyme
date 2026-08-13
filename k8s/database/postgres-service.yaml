@@ -1,0 +1,21 @@
+# Headless Service (clusterIP: None) — the conventional pairing for a
+# StatefulSet. It gives the pod a stable in-cluster DNS name:
+#   postgres.thyme.svc.cluster.local   (or just "postgres" from within the ns)
+# The backend connects to that name instead of a pod IP, which changes on every
+# restart. "Headless" means no load-balancer VIP — DNS resolves straight to the
+# pod, which is what a single stateful database wants.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: thyme
+  labels:
+    app: postgres
+spec:
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432

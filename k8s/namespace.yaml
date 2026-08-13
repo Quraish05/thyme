@@ -1,0 +1,8 @@
+# All Thyme sandbox objects live in their own namespace, so the whole app can be
+# inspected (or torn down) as a unit and stays isolated from kube-system etc.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: thyme
+  labels:
+    app.kubernetes.io/part-of: thyme

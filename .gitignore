@@ -14,6 +14,9 @@
 # Logs
 *.log
 
+# Demo narration script — a working draft, not part of the docs set yet.
+docs/demo-script.md
+
 # Stray Next.js build output if a build is ever run from the repo root
 # (the real app builds under frontend/.next, ignored by frontend/.gitignore).
 /.next/
