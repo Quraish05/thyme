@@ -1,0 +1,69 @@
+# Postgres as a StatefulSet (not a Deployment) because it has durable identity
+# and storage: a stable pod name (postgres-0) and a PersistentVolumeClaim that
+# survives pod restarts. A Deployment's pods are interchangeable and would lose
+# data on reschedule — wrong for a database.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: thyme
+spec:
+  serviceName: postgres # must match the headless Service name
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          # pgvector image = stock Postgres 16 + the `vector` extension available,
+          # so the backend's `CREATE EXTENSION vector` migration can succeed.
+          image: pgvector/pgvector:pg16
+          ports:
+            - name: postgres
+              containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: postgres-secret
+          env:
+            # Point PGDATA at a SUBDIRECTORY of the mounted volume. Mounting a
+            # volume directly at /var/lib/postgresql/data can trip initdb on some
+            # provisioners; a subdir sidesteps that and is the common convention.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          # Readiness gates traffic until Postgres actually answers; liveness
+          # restarts it if it wedges. pg_isready is the canonical check.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "thyme", "-d", "thyme"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "thyme", "-d", "thyme"]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              memory: "512Mi"
+  # volumeClaimTemplates makes the StatefulSet mint a PVC per replica
+  # (data-postgres-0). kind ships a default StorageClass (local-path) that
+  # provisions it automatically.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
