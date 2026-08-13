@@ -107,8 +107,12 @@ never imply clinical precision. Respond only via the provided JSON schema.\
 """
 
 
-def _format_goal(goal: HealthGoal | None) -> str:
-    """One-line goal + profile description for the prompt, or 'No goal set.'."""
+def format_goal(goal: HealthGoal | None) -> str:
+    """One-line goal + profile description for the prompt, or 'No goal set.'.
+
+    Public because the goal evaluator reuses it — the shared way to render a
+    :class:`~app.models.health_goal.HealthGoal` into prompt text.
+    """
     if goal is None:
         return "No goal set."
     parts = [f"type {goal.goal_type}"]
@@ -134,7 +138,7 @@ def _build_user_message(
     meals: list[MealLog],
     exercises: list[ExerciseLog],
 ) -> str:
-    lines = [f"Date: {on_date.isoformat()}", f"Goal: {_format_goal(goal)}", "", "Meals:"]
+    lines = [f"Date: {on_date.isoformat()}", f"Goal: {format_goal(goal)}", "", "Meals:"]
     if meals:
         for m in meals:
             portion = f" ({m.note})" if m.note else ""

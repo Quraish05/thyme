@@ -1,9 +1,9 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, status
-from pydantic import ValidationError
+from fastapi import APIRouter, status
 from sqlalchemy import func, select
 
+from app.api.crud import apply_validated_patch, get_owned_or_404
 from app.api.deps import UNAUTHORIZED_RESPONSE, CurrentUser, DbSession
 from app.api.responses import not_found_response
 from app.models.note import Note
@@ -24,10 +24,7 @@ _NOT_FOUND = not_found_response("No such reminder for this user", REMINDER_NOT_F
 
 async def _get_owned_reminder(reminder_id: int, user: CurrentUser, db: DbSession) -> Reminder:
     """Fetch a reminder owned by the current user, or raise 404."""
-    reminder = await db.get(Reminder, reminder_id)
-    if reminder is None or reminder.user_id != user.id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=REMINDER_NOT_FOUND)
-    return reminder
+    return await get_owned_or_404(db, Reminder, reminder_id, user.id, REMINDER_NOT_FOUND)
 
 
 async def _validate_target(
@@ -41,9 +38,7 @@ async def _validate_target(
     if target_type is None:
         return
     if target_type == "note":
-        note = await db.get(Note, target_id)
-        if note is None or note.user_id != user.id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=TARGET_NOT_FOUND)
+        await get_owned_or_404(db, Note, target_id, user.id, TARGET_NOT_FOUND)
 
 
 @router.get(
@@ -139,23 +134,18 @@ async def update_reminder(
     """
     reminder = await _get_owned_reminder(reminder_id, current_user, db)
 
-    updates = payload.model_dump(exclude_unset=True)
-    if not updates:
+    if not apply_validated_patch(
+        reminder,
+        payload,
+        schema=ReminderBase,
+        fields=_REMINDER_FIELDS,
+        fallback_msg="Invalid reminder update",
+    ):
         return reminder
 
-    merged = {field: getattr(reminder, field) for field in _REMINDER_FIELDS} | updates
-    try:
-        validated = ReminderBase.model_validate(merged)
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=exc.errors()[0].get("msg", "Invalid reminder update"),
-        ) from exc
-
-    await _validate_target(validated.target_type, validated.target_id, current_user, db)
-
-    for field in _REMINDER_FIELDS:
-        setattr(reminder, field, getattr(validated, field))
+    # Re-check ownership of the (possibly new) target now that the merged values
+    # are in place; nothing is committed until this passes.
+    await _validate_target(reminder.target_type, reminder.target_id, current_user, db)
 
     await db.commit()
     await db.refresh(reminder)

@@ -1,10 +1,11 @@
-"""Shared provider plumbing for the AI note features.
+"""Shared provider plumbing for the AI features.
 
-Both AI features in this app — follow-up extraction and tag suggestion — talk to
-the same two providers (Anthropic and Gemini) with the same strict, schema-
-constrained structured output. This module holds the parts that don't change
-between features: client construction, provider selection, and the actual API
-call. Each feature supplies its own prompt and output schema on top.
+Every AI feature in this app — follow-up extraction, tag suggestion, the journal
+Q&A, the goal evaluator, and more — talks to the same two providers (Anthropic and
+Gemini) with the same strict, schema-constrained structured output. This module
+holds the parts that don't change between features: client construction, provider
+selection, the actual API call, and the shared :class:`AIResult` result base. Each
+feature supplies its own prompt and output schema on top.
 
 The structured-output contract is provider-specific in shape but identical in
 intent (CCAF Domain 4.3): Anthropic takes a raw JSON Schema dict via
@@ -13,6 +14,7 @@ converts it (Optional -> nullable, Literal -> enum). Callers pass both.
 """
 
 import logging
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import TypeVar
 
@@ -49,6 +51,20 @@ class AIError(RuntimeError):
 
 class AINotConfiguredError(AIError):
     """AI features are disabled because the active provider's key is missing/rejected."""
+
+
+@dataclass
+class AIResult:
+    """Base for an AI feature's result: which model answered, and whether it ran.
+
+    Every paid AI feature that can *short-circuit* (return a canned answer without
+    calling the provider — e.g. an empty journal, or text too thin to tag) shares
+    this shape. Subclasses add their own payload field(s). The route charges a
+    credit only when ``used_model`` is True, so a short-circuited call is free.
+    """
+
+    model: str
+    used_model: bool
 
 
 @lru_cache(maxsize=1)

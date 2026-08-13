@@ -1,8 +1,9 @@
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, status
 from sqlalchemy import case, select
 
+from app.api.crud import get_owned_or_404
 from app.api.deps import UNAUTHORIZED_RESPONSE, CurrentUser, DbSession
 from app.api.responses import not_found_response
 from app.models.food import FoodItem
@@ -28,10 +29,7 @@ _SLOT_ORDER = case(
 
 async def _get_owned_meal(meal_id: int, user: CurrentUser, db: DbSession) -> MealLog:
     """Fetch a meal owned by the current user, or raise 404."""
-    meal = await db.get(MealLog, meal_id)
-    if meal is None or meal.user_id != user.id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MEAL_NOT_FOUND)
-    return meal
+    return await get_owned_or_404(db, MealLog, meal_id, user.id, MEAL_NOT_FOUND)
 
 
 @router.get(
@@ -75,9 +73,9 @@ async def create_meal(
     The food must belong to the caller; its name is snapshotted onto the meal so
     the log survives the food later being deleted.
     """
-    food = await db.get(FoodItem, payload.food_id)
-    if food is None or food.user_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=FOOD_NOT_FOUND)
+    food = await get_owned_or_404(
+        db, FoodItem, payload.food_id, current_user.id, FOOD_NOT_FOUND
+    )
 
     meal = MealLog(
         user_id=current_user.id,

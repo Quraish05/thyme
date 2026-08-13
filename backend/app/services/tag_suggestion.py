@@ -10,12 +10,21 @@ same structured-output + validation-retry discipline as the follow-up extractor
 (CCAF Domain 4.3 / 4.4).
 """
 
+from dataclasses import dataclass
+
 from app.schemas.note_ai import TagSuggestion, TagSuggestionExtraction
-from app.services.ai_client import active_model, count_words, generate_structured
+from app.services.ai_client import AIResult, active_model, count_words, generate_structured
 
 # Below this many words there isn't enough substance to tag meaningfully; skip
 # the model (and its cost) and return nothing. Mirrors the frontend gate.
 _MIN_CONTENT_WORDS = 4
+
+
+@dataclass
+class TagResult(AIResult):
+    """Proposed tags; ``model``/``used_model`` come from :class:`AIResult`."""
+
+    tags: list[TagSuggestion]
 
 # How many tags we ask for at most — enough to capture themes, few enough to
 # stay curated rather than noisy.
@@ -98,17 +107,18 @@ def _build_user_message(*, title: str, body: str) -> str:
     return "\n".join([f"Title: {title}", "Body:", body])
 
 
-async def suggest_tags(*, title: str, body: str) -> tuple[list[TagSuggestion], str]:
+async def suggest_tags(*, title: str, body: str) -> TagResult:
     """Propose topic tags for an entry's text, with the model that produced them.
 
-    Returns ``([], model)`` for text too thin to tag meaningfully. Raises
+    Returns ``used_model=False`` (no API call, so the route charges nothing) for
+    text too thin to tag meaningfully. Raises
     :class:`~app.services.ai_client.AINotConfiguredError` when the provider's key
     is missing/rejected, or :class:`~app.services.ai_client.AIError` when the
     model never returns a valid result.
     """
     # Too little to work with -> nothing to tag; skip the model (and its cost).
     if count_words(title, body) < _MIN_CONTENT_WORDS:
-        return [], active_model()
+        return TagResult(model=active_model(), used_model=False, tags=[])
 
     extraction, model = await generate_structured(
         system=_SYSTEM_PROMPT,
@@ -116,4 +126,4 @@ async def suggest_tags(*, title: str, body: str) -> tuple[list[TagSuggestion], s
         anthropic_schema=_SCHEMA,
         response_model=TagSuggestionExtraction,
     )
-    return extraction.tags[:_MAX_TAGS], model
+    return TagResult(model=model, used_model=True, tags=extraction.tags[:_MAX_TAGS])

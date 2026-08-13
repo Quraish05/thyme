@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, status
 from sqlalchemy import select
 
+from app.api.crud import get_owned_or_404
 from app.api.deps import UNAUTHORIZED_RESPONSE, CurrentUser, DbSession
 from app.api.responses import not_found_response
 from app.models.ingredient import Ingredient
@@ -17,12 +18,7 @@ async def _get_owned_ingredient(
     ingredient_id: int, user: CurrentUser, db: DbSession
 ) -> Ingredient:
     """Fetch an ingredient owned by the current user, or raise 404."""
-    ingredient = await db.get(Ingredient, ingredient_id)
-    if ingredient is None or ingredient.user_id != user.id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=INGREDIENT_NOT_FOUND
-        )
-    return ingredient
+    return await get_owned_or_404(db, Ingredient, ingredient_id, user.id, INGREDIENT_NOT_FOUND)
 
 
 @router.get(

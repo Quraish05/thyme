@@ -22,15 +22,23 @@ patterns end-to-end:
   confidence, used by the UI as a hint — never as an auto-accept gate.
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.schemas.note_ai import FollowUp, FollowUpExtraction
-from app.services.ai_client import active_model, count_words, generate_structured
+from app.services.ai_client import AIResult, active_model, count_words, generate_structured
 
 # Below this many words (title + body) a note is too thin to plausibly contain a
 # follow-up. We skip the model entirely — no cost, and it avoids feeding nonsense
 # to the extractor. Mirrors the frontend's MIN_FOLLOW_UP_WORDS gate.
 _MIN_CONTENT_WORDS = 6
+
+
+@dataclass
+class FollowUpResult(AIResult):
+    """Proposed follow-ups; ``model``/``used_model`` come from :class:`AIResult`."""
+
+    follow_ups: list[FollowUp]
 
 
 # The strict output contract. `additionalProperties: false` + `required` on
@@ -155,10 +163,11 @@ async def suggest_follow_ups(
     kind: str,
     entry_date=None,
     now: datetime | None = None,
-) -> tuple[list[FollowUp], str]:
+) -> FollowUpResult:
     """Propose reminders implied by a note, with the model that produced them.
 
-    Returns ``([], model)`` for a note too thin to bother the model with. Raises
+    Returns ``used_model=False`` (no API call, so the route charges nothing) for a
+    note too thin to bother the model with. Raises
     :class:`~app.services.ai_client.AINotConfiguredError` when the provider's key
     is missing/rejected, or :class:`~app.services.ai_client.AIError` when the
     model never returns a valid result.
@@ -166,7 +175,7 @@ async def suggest_follow_ups(
     # Too little to work with -> nothing to extract; skip the model (and its
     # cost). No provider or key needed for this path.
     if count_words(title, body) < _MIN_CONTENT_WORDS:
-        return [], active_model()
+        return FollowUpResult(model=active_model(), used_model=False, follow_ups=[])
 
     now = now or datetime.now(UTC)
     extraction, model = await generate_structured(
@@ -177,4 +186,6 @@ async def suggest_follow_ups(
         anthropic_schema=_SCHEMA,
         response_model=FollowUpExtraction,
     )
-    return _ensure_aware(extraction.follow_ups), model
+    return FollowUpResult(
+        model=model, used_model=True, follow_ups=_ensure_aware(extraction.follow_ups)
+    )

@@ -23,7 +23,7 @@ from app.models.note import Note
 from app.models.note_chunk import NoteChunk
 from app.models.user import User
 from app.schemas.journal_qa import AskJournalAnswer, Citation
-from app.services.ai_client import active_model, generate_structured
+from app.services.ai_client import AIResult, active_model, generate_structured
 from app.services.embeddings import embed_query
 
 # Retrieval knobs.
@@ -256,13 +256,11 @@ def _build_user_message(question: str, excerpts: list[Retrieved]) -> str:
 
 
 @dataclass
-class QaResult:
-    """The answer plus citations; ``used_model`` tells the route whether to charge."""
+class QaResult(AIResult):
+    """The grounded answer + citations; ``model``/``used_model`` come from :class:`AIResult`."""
 
     answer: str
     citations: list[Citation]
-    model: str
-    used_model: bool
 
 
 async def answer_question(db: AsyncSession, user: User, question: str) -> QaResult:
@@ -275,11 +273,11 @@ async def answer_question(db: AsyncSession, user: User, question: str) -> QaResu
         select(func.count()).select_from(NoteChunk).where(NoteChunk.user_id == user.id)
     )
     if not has_any:
-        return QaResult(_NO_ENTRIES, [], active_model(), used_model=False)
+        return QaResult(model=active_model(), used_model=False, answer=_NO_ENTRIES, citations=[])
 
     excerpts = await retrieve(db, user, question)
     if not excerpts:
-        return QaResult(_NO_MATCH, [], active_model(), used_model=False)
+        return QaResult(model=active_model(), used_model=False, answer=_NO_MATCH, citations=[])
 
     result, model = await generate_structured(
         system=_SYSTEM_PROMPT,
@@ -299,4 +297,4 @@ async def answer_question(db: AsyncSession, user: User, question: str) -> QaResu
         )
         for e in used
     ]
-    return QaResult(result.answer, citations, model, used_model=True)
+    return QaResult(model=model, used_model=True, answer=result.answer, citations=citations)
