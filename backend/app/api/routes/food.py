@@ -1,5 +1,4 @@
-from fastapi import APIRouter, HTTPException, status
-from pydantic import ValidationError
+from fastapi import APIRouter, status
 from sqlalchemy import func, select
 
 from app.api.ai_errors import ai_errors_as_http
@@ -8,6 +7,7 @@ from app.api.ai_quota import (
     enforce_ai_quota,
     record_ai_usage,
 )
+from app.api.crud import apply_validated_patch, get_owned_or_404
 from app.api.deps import UNAUTHORIZED_RESPONSE, CurrentUser, DbSession
 from app.api.responses import not_found_response
 from app.models.food import FoodItem
@@ -49,10 +49,7 @@ _NOT_FOUND = not_found_response("No such food for this user", FOOD_NOT_FOUND)
 
 async def _get_owned_food(food_id: int, user: CurrentUser, db: DbSession) -> FoodItem:
     """Fetch a food item owned by the current user, or raise 404."""
-    food = await db.get(FoodItem, food_id)
-    if food is None or food.user_id != user.id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=FOOD_NOT_FOUND)
-    return food
+    return await get_owned_or_404(db, FoodItem, food_id, user.id, FOOD_NOT_FOUND)
 
 
 @router.get(
@@ -243,22 +240,10 @@ async def update_food(
     """
     food = await _get_owned_food(food_id, current_user, db)
 
-    updates = payload.model_dump(exclude_unset=True)
-    if not updates:
+    if not apply_validated_patch(
+        food, payload, schema=FoodItemBase, fields=_FOOD_FIELDS, fallback_msg="Invalid food update"
+    ):
         return food
-
-    merged = {field: getattr(food, field) for field in _FOOD_FIELDS} | updates
-    try:
-        validated = FoodItemBase.model_validate(merged)
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=exc.errors()[0].get("msg", "Invalid food update"),
-        ) from exc
-
-    data = validated.model_dump()
-    for field in _FOOD_FIELDS:
-        setattr(food, field, data[field])
 
     await db.commit()
     await db.refresh(food)

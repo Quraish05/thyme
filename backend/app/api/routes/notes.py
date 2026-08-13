@@ -1,5 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, status
-from pydantic import ValidationError
+from fastapi import APIRouter, Query, status
 from sqlalchemy import select
 
 from app.api.ai_errors import ai_errors_as_http
@@ -8,6 +7,7 @@ from app.api.ai_quota import (
     enforce_ai_quota,
     record_ai_usage,
 )
+from app.api.crud import apply_validated_patch, get_owned_or_404
 from app.api.deps import UNAUTHORIZED_RESPONSE, CurrentUser, DbSession
 from app.api.responses import not_found_response
 from app.models.note import Note
@@ -36,10 +36,7 @@ _NOT_FOUND = not_found_response("No such note for this user", NOTE_NOT_FOUND)
 
 async def _get_owned_note(note_id: int, user: CurrentUser, db: DbSession) -> Note:
     """Fetch a note owned by the current user, or raise 404."""
-    note = await db.get(Note, note_id)
-    if note is None or note.user_id != user.id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOTE_NOT_FOUND)
-    return note
+    return await get_owned_or_404(db, Note, note_id, user.id, NOTE_NOT_FOUND)
 
 
 @router.get(
@@ -133,24 +130,10 @@ async def update_note(
     """
     note = await _get_owned_note(note_id, current_user, db)
 
-    updates = payload.model_dump(exclude_unset=True)
-    if not updates:
+    if not apply_validated_patch(
+        note, payload, schema=NoteBase, fields=_NOTE_FIELDS, fallback_msg="Invalid note update"
+    ):
         return note
-
-    merged = {field: getattr(note, field) for field in _NOTE_FIELDS} | updates
-    try:
-        validated = NoteBase.model_validate(merged)
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=exc.errors()[0].get("msg", "Invalid note update"),
-        ) from exc
-
-    # model_dump() so nested schemas (checklist ``items``) land as plain
-    # dicts the JSONB column can store — not Pydantic objects.
-    validated_data = validated.model_dump()
-    for field in _NOTE_FIELDS:
-        setattr(note, field, validated_data[field])
 
     await db.commit()
     await db.refresh(note)
@@ -178,16 +161,19 @@ async def suggest_note_follow_ups(
     note = await _get_owned_note(note_id, current_user, db)
     enforce_ai_quota(current_user)
     with ai_errors_as_http("Could not extract follow-ups right now. Please try again."):
-        suggestions, model = await suggest_follow_ups(
+        result = await suggest_follow_ups(
             title=note.title,
             body=note.body_md,
             kind=note.kind,
             entry_date=note.entry_date,
         )
-    await record_ai_usage(current_user, db)
+    # Charge only when the model actually ran; a note too thin to extract from
+    # short-circuits without an API call (see suggest_follow_ups).
+    if result.used_model:
+        await record_ai_usage(current_user, db)
 
     return FollowUpSuggestionsResponse(
-        note_id=note.id, model=model, suggestions=suggestions
+        note_id=note.id, model=result.model, suggestions=result.follow_ups
     )
 
 
@@ -209,12 +195,13 @@ async def suggest_note_tags(
     """
     enforce_ai_quota(current_user)
     with ai_errors_as_http("Could not suggest tags right now. Please try again."):
-        suggestions, model = await suggest_tags(
-            title=payload.title, body=payload.body_md
-        )
-    await record_ai_usage(current_user, db)
+        result = await suggest_tags(title=payload.title, body=payload.body_md)
+    # Charge only when the model actually ran; text too thin to tag short-circuits
+    # without an API call (see suggest_tags).
+    if result.used_model:
+        await record_ai_usage(current_user, db)
 
-    return TagSuggestionsResponse(model=model, suggestions=suggestions)
+    return TagSuggestionsResponse(model=result.model, suggestions=result.tags)
 
 
 @router.delete(

@@ -21,8 +21,8 @@ from app.models.health_goal import HealthGoal
 from app.models.meal_log import MealLog
 from app.models.user import User
 from app.schemas.goal_eval import EvalScope, GoalEvaluation
-from app.services.ai_client import active_model, generate_structured
-from app.services.daily_summary import _format_goal
+from app.services.ai_client import AIResult, active_model, generate_structured
+from app.services.daily_summary import format_goal
 
 _WEEK_DAYS = 7
 
@@ -106,12 +106,10 @@ Respond only via the provided JSON schema.\
 
 
 @dataclass
-class EvalResult:
-    """The evaluation plus the model; ``used_model`` tells the route whether to charge."""
+class EvalResult(AIResult):
+    """The goal evaluation; ``model``/``used_model`` come from :class:`AIResult`."""
 
     evaluation: GoalEvaluation
-    model: str
-    used_model: bool
 
 
 def _range_for(scope: EvalScope, today: date) -> tuple[date, date]:
@@ -124,7 +122,9 @@ def _range_for(scope: EvalScope, today: date) -> tuple[date, date]:
 def _no_data(readout: str) -> EvalResult:
     """A free, no-model evaluation when there's nothing to judge."""
     return EvalResult(
-        GoalEvaluation(
+        model=active_model(),
+        used_model=False,
+        evaluation=GoalEvaluation(
             alignment_score=0,
             verdict="Not enough logged yet.",
             readout=readout,
@@ -132,8 +132,6 @@ def _no_data(readout: str) -> EvalResult:
             hurting=[],
             adjustment="",
         ),
-        active_model(),
-        used_model=False,
     )
 
 
@@ -149,7 +147,7 @@ def _build_user_message(
 ) -> str:
     """Aggregate the goal + per-day tallies + item lists into a plain-text prompt."""
     span = "today" if scope == "today" else f"the 7 days {start.isoformat()} → {end.isoformat()}"
-    lines = [f"Goal: {_format_goal(goal)}", f"Window: {span}", ""]
+    lines = [f"Goal: {format_goal(goal)}", f"Window: {span}", ""]
 
     by_day: dict[date, list[MealLog]] = {}
     for m in meals:
@@ -241,4 +239,4 @@ async def evaluate_goal(
         anthropic_schema=_SCHEMA,
         response_model=GoalEvaluation,
     )
-    return EvalResult(evaluation, model, used_model=True)
+    return EvalResult(model=model, used_model=True, evaluation=evaluation)

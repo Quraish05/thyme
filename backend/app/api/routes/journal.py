@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, status
 from sqlalchemy import select
 
 from app.api.ai_errors import ai_errors_as_http
 from app.api.ai_quota import QUOTA_EXCEEDED_RESPONSE, enforce_ai_quota, record_ai_usage
+from app.api.crud import get_owned_or_404
 from app.api.deps import UNAUTHORIZED_RESPONSE, CurrentUser, DbSession
 from app.api.responses import not_found_response
 from app.models.journal_insight import JournalInsight
@@ -56,12 +57,7 @@ async def _get_owned_insight(
     insight_id: int, user: CurrentUser, db: DbSession
 ) -> JournalInsight:
     """Fetch a saved insight owned by the current user, or raise 404."""
-    insight = await db.get(JournalInsight, insight_id)
-    if insight is None or insight.user_id != user.id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=INSIGHT_NOT_FOUND
-        )
-    return insight
+    return await get_owned_or_404(db, JournalInsight, insight_id, user.id, INSIGHT_NOT_FOUND)
 
 
 @router.post(
