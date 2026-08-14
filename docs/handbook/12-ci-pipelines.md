@@ -1,6 +1,6 @@
 # Chapter 15 — CI: three GitHub Actions workflows
 
-**Last updated:** 2026-08-13 · **Status:** ✅ current with `.github/workflows/` (backend `4dca8a3`, frontend `e8c0d80`, images `f5bd87b`)
+**Last updated:** 2026-08-14 · **Status:** ✅ current with `.github/workflows/` (backend `4dca8a3`, frontend `e8c0d80`, images `f5bd87b`)
 
 **Why we did this.** The deploy story was already automated — push to `master`,
 Render rebuilds the API, Vercel rebuilds the frontend. That's *continuous
@@ -288,8 +288,10 @@ convenience.
 
 - **`cache-from/to: type=gha`** persists Docker layer cache in GitHub's cache
   service between runs. Without it every run reinstalls the Python dependency
-  tree from scratch — and ours includes `torch` for local embeddings, which is why
-  this job takes ~16 minutes rather than ~1.
+  tree from scratch — the backend's heaviest layer, since it includes `torch` for
+  local embeddings (now the CPU-only build, ~2.5 GB rather than 10.8 GB — see
+  [Ch 16 §16.2](13-containerization.md#slimming-the-image-cpu-only-torch)). The
+  cache is the difference between a slow cold build and quick warm ones.
 - **`platforms: linux/amd64` only** — see the gotcha below if you're on an Apple
   Silicon Mac.
 
@@ -318,8 +320,10 @@ docker pull ghcr.io/quraish05/thyme-backend:latest
 docker run --rm ghcr.io/quraish05/thyme-backend:latest python -V
 ```
 
-Current timings, for calibration: **Backend CI ~1m15s**, **Frontend CI ~55s**,
-**Publish images ~16m30s** (both images, warm cache).
+Current timings, for calibration: **Backend CI ~1m15s**, **Frontend CI ~55s**.
+The **publish** job is dominated by the backend image build; it dropped sharply
+once `torch` went CPU-only ([Ch 16 §16.2](13-containerization.md#slimming-the-image-cpu-only-torch) —
+a ~4× smaller image) and stays quick on a warm `type=gha` cache.
 
 ---
 

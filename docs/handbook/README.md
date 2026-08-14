@@ -40,6 +40,28 @@ data model → the flow both directions → the tricky part in depth → how to 
 - ✅ **[Ch 8. Observability](03-observability.md)** — structured logging (structlog + stdlib unified), per-request correlation ids, and the liveness/readiness health split
 
 ### Part IV — Delivery & infrastructure
+
+> **New to DevOps? Read this part in order — 15 → 16 → 17 — it's one story.** The
+> question these chapters answer is: *how does a commit become something a user
+> can reach, safely?* Each feeds the next:
+>
+> ```
+>   commit ─▶ CI gates (Ch 15) ─▶ build container images (Ch 16) ─▶ GHCR
+>                                          │
+>                                          ▼
+>              run it on a local Kubernetes sandbox:  kind ─▶ Helm  (Ch 17)
+> ```
+>
+> Ch 15 *checks* the code and publishes an image; Ch 16 explains *what's in* that
+> image; Ch 17 *runs* the whole app on a throwaway cluster. Note the boundary:
+> real production stays on managed platforms (Vercel + Render + Neon — see the
+> [deployment runbook](../deployment.md)); the Kubernetes half is a **learning
+> sandbox**, never the deploy target ([why](../DECISIONS.md)).
+>
+> **Tools you'll want installed:** Docker (or OrbStack) and `gh` (GitHub CLI) for
+> all three; plus `kind`, `kubectl`, and `helm` for Ch 17. (`uv` and Node already
+> come with the backend and frontend.)
+
 - ✅ **[Ch 15. CI: three GitHub Actions workflows](12-ci-pipelines.md)** — gates vs. producers: `ruff` + `pytest` against a real pgvector Postgres, `eslint` + `tsc` + `next build`, and the matrix job that publishes both images to GHCR
 - ✅ **[Ch 16. Containerizing both apps](13-containerization.md)** — layer-cache ordering, `exec` and PID 1, the Next.js standalone runner, and why `NEXT_PUBLIC_*` is baked in at build time
 - ✅ **[Ch 17. Kubernetes learning sandbox](14-kubernetes-sandbox.md)** — a local `kind` cluster, explicitly not production: Secret + headless Service + StatefulSet/PVC for Postgres, probes, and the level-by-level path to Ingress and Helm
