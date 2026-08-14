@@ -1,0 +1,32 @@
+# Ingress: thyme.local/ → frontend, /api → backend.
+# Gated on ingress.enabled so the chart also works headless (e.g. port-forward)
+# where no ingress controller is installed — a first taste of conditional
+# templating with an if/end guard.
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: thyme
+  labels:
+    {{- include "thyme.labels" . | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: {{ .Values.backend.port }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: {{ .Values.frontend.port }}
+{{- end }}

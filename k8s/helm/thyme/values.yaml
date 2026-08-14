@@ -1,0 +1,49 @@
+# The single place to configure a Thyme sandbox deployment. Everything the raw
+# manifests hard-coded is a value here — so a different environment is a
+# different values file, not a different set of YAML.
+#
+# LEARNING SANDBOX ONLY: the DB password / SECRET_KEY below are throwaway dev
+# values, fine to commit for a local cluster. Real deployments would pass these
+# with `--set` or a secrets manager, never commit them.
+
+database:
+  image: pgvector/pgvector:pg16 # stock Postgres 16 + the `vector` extension
+  # Credentials declared ONCE — reused by the Postgres Secret and by the
+  # backend's DATABASE_URL (templates/backend-secret.yaml), so they can't drift.
+  user: thyme
+  password: thyme-dev-password
+  name: thyme
+  storage: 1Gi
+  resources:
+    requests: { cpu: "100m", memory: "256Mi" }
+    limits: { memory: "512Mi" }
+
+backend:
+  image: thyme-backend:dev
+  imagePullPolicy: IfNotPresent # kind-loaded image; never pull from a registry
+  replicas: 1
+  port: 8000
+  secretKey: dev-sandbox-secret-not-for-production-0123456789
+  # Non-secret env → rendered into the ConfigMap.
+  config:
+    ENVIRONMENT: development
+    LOG_LEVEL: INFO
+    AI_PROVIDER: anthropic
+    CORS_ORIGINS: '["http://thyme.local", "http://localhost:3000"]'
+  resources:
+    requests: { cpu: "100m", memory: "512Mi" }
+    limits: { memory: "1Gi" }
+
+frontend:
+  image: thyme-frontend:dev
+  imagePullPolicy: IfNotPresent
+  replicas: 1
+  port: 3000
+  resources:
+    requests: { cpu: "50m", memory: "128Mi" }
+    limits: { memory: "256Mi" }
+
+ingress:
+  enabled: true
+  className: nginx
+  host: thyme.local

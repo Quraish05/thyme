@@ -1,0 +1,91 @@
+# Backend tier: ConfigMap + Secret + Deployment + Service.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  labels:
+    {{- include "thyme.labels" . | nindent 4 }}
+data:
+  PORT: {{ .Values.backend.port | quote }}
+  {{- range $k, $v := .Values.backend.config }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backend-secret
+  labels:
+    {{- include "thyme.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  # Composed from the database values — declared once, so the backend and the
+  # Postgres Secret can never disagree on credentials. Host is the `postgres`
+  # headless Service.
+  DATABASE_URL: postgresql+asyncpg://{{ .Values.database.user }}:{{ .Values.database.password }}@postgres:5432/{{ .Values.database.name }}
+  SECRET_KEY: {{ .Values.backend.secretKey | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app: backend
+    {{- include "thyme.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.backend.replicas }}
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: {{ .Values.backend.image | quote }}
+          imagePullPolicy: {{ .Values.backend.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.backend.port }}
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secret
+          startupProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  labels:
+    app: backend
+    {{- include "thyme.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app: backend
+  ports:
+    - name: http
+      port: {{ .Values.backend.port }}
+      targetPort: http
