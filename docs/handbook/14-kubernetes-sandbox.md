@@ -1,6 +1,6 @@
 # Chapter 17 — Kubernetes: a local learning sandbox
 
-**Last updated:** 2026-08-14 · **Status:** 🚧 in progress — Levels 1–5 built (cluster → database → backend → frontend → Ingress); Level 6 (Helm) planned
+**Last updated:** 2026-08-14 · **Status:** ✅ all six levels built (cluster → database → backend → frontend → Ingress → Helm)
 
 > **This is not how Thyme is deployed.** Production stays exactly where it is:
 > frontend on Vercel, backend on Render, Postgres on Neon
@@ -65,7 +65,7 @@ The vocabulary, mapped to what we actually wrote:
 | 3 | **Backend** | Deployment, Service, ConfigMap/Secret, migrations on boot | ✅ |
 | 4 | **Frontend** | Deployment, Service | ✅ |
 | 5 | **Ingress** | `thyme.local` → frontend, `/api` → backend | ✅ |
-| 6 | **Helm** | the same three tiers as a chart | 🚧 |
+| 6 | **Helm** | the same tiers as one parameterized chart | ✅ |
 
 Files: [k8s/README.md](../../k8s/README.md) (the runbook),
 [namespace.yaml](../../k8s/namespace.yaml),
@@ -73,10 +73,11 @@ Files: [k8s/README.md](../../k8s/README.md) (the runbook),
 [backend/](../../k8s/backend/) (ConfigMap, Secret, Deployment, Service),
 [frontend/](../../k8s/frontend/) (Deployment, Service),
 [ingress.yaml](../../k8s/ingress.yaml),
-[kind-cluster.yaml](../../k8s/kind-cluster.yaml).
+[kind-cluster.yaml](../../k8s/kind-cluster.yaml),
+[helm/thyme/](../../k8s/helm/thyme/) (the Level 6 chart).
 
 Level 5 isn't cosmetic — it's the level that *solves a real problem* we already
-know we have. See §17.8.
+know we have. See §17.9.
 
 ---
 
@@ -90,7 +91,7 @@ kubectl config current-context   # kind-thyme
 
 `kind` writes a kubeconfig context and switches to it. Two habits worth forming
 immediately: check `current-context` before running anything destructive, and
-remember that every command below needs `-n thyme` (§17.10).
+remember that every command below needs `-n thyme` (§17.11).
 
 Tearing down is the reason this is a safe place to experiment:
 
@@ -350,7 +351,7 @@ kubectl -n thyme exec deploy/backend -- \
 Level 4 is deliberately anticlimactic, and noticing *why* is the point. The
 frontend is stateless, so it's a plain Deployment + Service with no ConfigMap, no
 Secret, and no storage — everything interesting about it was already decided at
-**build** time (§17.8, and [Ch 16 §16.4](13-containerization.md#164-the-tricky-part--next_public_-is-baked-in-at-build-time)).
+**build** time (§17.9, and [Ch 16 §16.4](13-containerization.md#164-the-tricky-part--next_public_-is-baked-in-at-build-time)).
 
 ```bash
 docker build --build-arg NEXT_PUBLIC_API_URL=http://thyme.local -t thyme-frontend:dev frontend/
@@ -369,7 +370,7 @@ complexity in Level 2 worth dwelling on.
 ## 17.7 Level 5 — the Ingress (and the payoff)
 
 This is the level that turns three separate Services into one app your browser can
-open, and it's the concrete fix to the build-time gotcha (§17.8).
+open, and it's the concrete fix to the build-time gotcha (§17.9).
 
 **First, the cluster needs a door.** A default `kind` cluster has no way for
 `localhost:80` to reach the Ingress controller, so Level 5 starts by *recreating*
@@ -418,7 +419,7 @@ rules:
 This is what makes the frontend's baked-in `NEXT_PUBLIC_API_URL=http://thyme.local`
 correct: the browser loads the page from `thyme.local` and calls the API on the
 *same* host, so the Ingress routes `/api` to the backend. No CORS, no in-cluster
-DNS in the browser — the gotcha §17.8 describes, dissolved.
+DNS in the browser — the gotcha §17.9 describes, dissolved.
 
 **Point the hostname at your machine** (once; needs `sudo`) and open it:
 
@@ -443,7 +444,71 @@ with less typing.
 
 ---
 
-## 17.8 The tricky part — two things the manifests can't hide
+## 17.8 Level 6 — Helm
+
+Five levels of hand-written YAML make the case *for* Helm better than any
+tutorial could: you can now see exactly what it removes. The chart at
+[k8s/helm/thyme/](../../k8s/helm/thyme) packages the same objects, with every
+value the raw manifests hard-coded lifted into one
+[values.yaml](../../k8s/helm/thyme/values.yaml).
+
+> **A chart is templates + values.** `helm install` renders the templates against
+> the values and applies the result. The win isn't magic — it's that "what
+> changes between environments" (image tags, replica counts, the Ingress host, DB
+> credentials) becomes *one file*, not a hunt through ten manifests.
+
+The layout mirrors the tiers you already built by hand:
+
+```
+k8s/helm/thyme/
+  Chart.yaml            # name + version metadata
+  values.yaml           # the single config surface
+  templates/
+    _helpers.tpl        # common labels, defined once
+    database.yaml       # Secret + headless Service + StatefulSet
+    backend.yaml        # ConfigMap + Secret + Deployment + Service
+    frontend.yaml       # Deployment + Service
+    ingress.yaml        # guarded by an if/end on ingress.enabled
+    NOTES.txt           # post-install instructions
+```
+
+Two ideas earn their keep immediately:
+
+- **Credentials declared once.** The DB user/password/name live in `values.yaml`,
+  and the backend's `DATABASE_URL` is *composed* from them in the template —
+  `…://{{ .Values.database.user }}:{{ .Values.database.password }}@postgres:5432/{{ .Values.database.name }}`.
+  The raw manifests repeated the password in two files and *hoped* they matched;
+  the chart makes drift impossible.
+- **Conditional resources.** `ingress.yaml` is wrapped in an
+  `if .Values.ingress.enabled` guard, so the same chart deploys with or without an
+  Ingress (fall back to `port-forward`). That guard also taught a lesson: Helm
+  parses template directives *inside `#` comments*, so a stray `if` in a comment
+  is a real parse error — which `helm lint` catches before you ever install.
+
+### Install it — one command for the whole app
+
+```bash
+kind load docker-image thyme-backend:dev thyme-frontend:dev --name thyme
+helm install thyme k8s/helm/thyme --namespace thyme --create-namespace
+```
+
+That single `helm install` replaces the entire §17.3–§17.7 `kubectl apply`
+sequence. The deployed objects are identical, so you verify exactly as before:
+
+```bash
+helm -n thyme list                 # thyme   deployed   thyme-0.1.0
+curl --resolve thyme.local:80:127.0.0.1 http://thyme.local/api/v1/health
+# → {"status":"ok","version":"0.1.0"}
+```
+
+`helm upgrade thyme k8s/helm/thyme` re-renders and applies only the diff;
+`helm uninstall thyme` removes every object in the release at once. That
+lifecycle — install / upgrade / roll back / uninstall as *one unit* — is the
+thing raw manifests never gave us, and the whole reason Helm exists.
+
+---
+
+## 17.9 The tricky part — two things the manifests can't hide
 
 ### 1 · Storage outlives almost everything
 
@@ -489,7 +554,7 @@ gotcha rather than memorise it.
 
 ---
 
-## 17.9 How to run, inspect and debug
+## 17.10 How to run, inspect and debug
 
 The full stack, from nothing, lives in [k8s/README.md](../../k8s/README.md); each
 level's bring-up is in §17.3–§17.7. The Level 2 core, as a reminder:
@@ -539,12 +604,12 @@ kubelet will try to pull `thyme-backend:dev` from Docker Hub and fail.
 
 ---
 
-## 17.10 Gotchas
+## 17.11 Gotchas
 
 - **`-n thyme` on everything.** Without it you're querying `default` and
   everything looks empty. `kubectl config set-context --current --namespace=thyme`
   once, and stop typing it.
-- **Deleting a StatefulSet keeps its PVC** (§17.8). This is the single most
+- **Deleting a StatefulSet keeps its PVC** (§17.9). This is the single most
   confusing behaviour in Level 2.
 - **`POSTGRES_PASSWORD` only applies on first boot.** Changing the Secret does
   nothing to an initialised volume.
@@ -569,13 +634,10 @@ kubelet will try to pull `thyme-backend:dev` from Docker Hub and fail.
 
 ---
 
-## 17.11 Future enhancements
+## 17.12 Future enhancements
 
-Levels 1–5 are built (§17.3–§17.7). What's left:
+All six levels are built (§17.3–§17.8). What's left is polish:
 
-- **Level 6 — Helm:** the next real step. Only now, with three hand-written tiers
-  to compare against, templating earns its keep — values per environment, one
-  `helm upgrade`, and a concrete answer to "what would I have to repeat by hand?"
 - **An init container for the backend** that blocks on `pg_isready` before the app
   starts, so the boot-time `CrashLoopBackOff` (§17.5) never happens — the same fix
   [Ch 16 §16.6](13-containerization.md#166-gotchas) wants for multi-replica boots.

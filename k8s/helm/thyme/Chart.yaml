@@ -1,0 +1,10 @@
+apiVersion: v2
+name: thyme
+description: >-
+  Thyme on Kubernetes — the local kind learning sandbox (frontend + backend +
+  Postgres) as a single Helm chart. Not production; see docs/DECISIONS.md.
+type: application
+# Chart version — bump on chart changes.
+version: 0.1.0
+# The app version this chart deploys (informational).
+appVersion: "0.1.0"

@@ -1,0 +1,84 @@
+# Database tier: Secret + headless Service + StatefulSet (with PVC).
+# Same three objects as k8s/database/, now parameterized from values.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  labels:
+    {{- include "thyme.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  POSTGRES_USER: {{ .Values.database.user | quote }}
+  POSTGRES_PASSWORD: {{ .Values.database.password | quote }}
+  POSTGRES_DB: {{ .Values.database.name | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+    {{- include "thyme.labels" . | nindent 4 }}
+spec:
+  clusterIP: None # headless — stable DNS for the StatefulSet
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+    {{- include "thyme.labels" . | nindent 4 }}
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.database.image | quote }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: postgres-secret
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.database.user | quote }}, "-d", {{ .Values.database.name | quote }}]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.database.user | quote }}, "-d", {{ .Values.database.name | quote }}]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.database.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.database.storage | quote }}
