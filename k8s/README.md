@@ -102,6 +102,24 @@ curl --resolve thyme.local:80:127.0.0.1 http://thyme.local/api/v1/health   # {"s
 curl --resolve thyme.local:80:127.0.0.1 http://thyme.local/                # <title>Thyme</title>
 ```
 
+## Level 6 — Helm
+
+The whole app as one chart ([helm/thyme/](helm/thyme)). A single `helm install`
+replaces the Level 1–5 `kubectl apply` sequence, and `helm/thyme/values.yaml` is
+the one place to change images, replicas, the Ingress host, or DB credentials.
+
+```
+# needs the Level 5 cluster (kind-cluster.yaml) + ingress-nginx already installed
+kind load docker-image thyme-backend:dev thyme-frontend:dev --name thyme
+helm install thyme helm/thyme --namespace thyme --create-namespace
+
+helm -n thyme list                   # thyme   deployed   thyme-0.1.0
+helm upgrade thyme helm/thyme        # apply changes to values/templates
+helm uninstall thyme                 # remove every object in the release at once
+```
+
+Verify the same way as Level 5 (`curl --resolve thyme.local:80:127.0.0.1 …`).
+
 ## Tear down
 
 ```
