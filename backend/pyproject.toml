@@ -25,6 +25,11 @@ dependencies = [
     "sentence-transformers>=3.0.0",
     # Cron-spec parsing for the background job scheduler (app/services/jobs).
     "croniter>=3.0.0",
+    # Pulled in transitively by sentence-transformers, but declared explicitly so
+    # we can pin it to the CPU-only build (see [tool.uv.sources] below). Without
+    # this, torch drags ~2.9GB of unused NVIDIA CUDA libraries into the Linux
+    # image. There's no GPU on Render or in the kind sandbox, so CPU is correct.
+    "torch>=2.0.0",
 ]
 
 [dependency-groups]
@@ -54,3 +59,17 @@ select = ["E", "F", "I", "UP", "B"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+
+[[tool.uv.index]]
+# PyTorch's CPU-only wheel index. `explicit = true` means uv pulls from it ONLY
+# for packages that opt in via [tool.uv.sources] — everything else still
+# resolves from PyPI as normal.
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+# Route torch to the CPU index on Linux (drops ~2.9GB of NVIDIA CUDA libs from
+# the image). Scoped to Linux so macOS / local dev resolution is untouched —
+# macOS torch has no CUDA build anyway.
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
