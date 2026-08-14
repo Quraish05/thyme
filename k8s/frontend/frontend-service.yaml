@@ -1,0 +1,16 @@
+# Stable in-cluster address for the frontend pods. The Ingress routes "/" here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: thyme
+  labels:
+    app: frontend
+spec:
+  type: ClusterIP
+  selector:
+    app: frontend
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http

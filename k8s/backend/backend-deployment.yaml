@@ -1,0 +1,61 @@
+# Backend as a Deployment (stateless — unlike the DB). It can be freely
+# rescheduled/scaled; all state lives in Postgres.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: thyme
+  labels:
+    app: backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: thyme-backend:dev
+          # The image was `kind load`ed, not pushed to a registry, so never try
+          # to pull it — use the node-local copy.
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          # Inject both config + secrets as environment variables.
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secret
+          # entrypoint.sh runs `alembic upgrade head` BEFORE uvicorn starts, so
+          # the app doesn't answer /health until migrations finish. A startup
+          # probe gives that a generous window (up to 30×5s = 150s) without the
+          # liveness probe killing the pod mid-migration. Once it passes,
+          # readiness/liveness take over.
+          startupProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "512Mi"
+            limits:
+              memory: "1Gi"

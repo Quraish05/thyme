@@ -1,0 +1,35 @@
+# The single entry point from the host browser into the cluster.
+#
+# One host (thyme.local), two path rules:
+#   /api  → backend  (the API serves /api/v1/*; the path is forwarded unchanged)
+#   /     → frontend (everything else: pages, /_next assets, etc.)
+#
+# nginx matches the LONGEST prefix, so /api/v1/health hits the backend while /
+# catches the rest. This is what makes the baked-in NEXT_PUBLIC_API_URL=
+# http://thyme.local work: the browser calls the API on the same host it loaded
+# the app from.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: thyme
+  namespace: thyme
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: thyme.local
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 3000

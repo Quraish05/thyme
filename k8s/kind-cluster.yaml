@@ -1,0 +1,28 @@
+# kind cluster config that makes an Ingress reachable from the host browser.
+#
+# Two things ingress-nginx needs on kind:
+#  1. `ingress-ready=true` node label — the ingress-nginx kind manifest schedules
+#     its controller onto the node carrying this label.
+#  2. extraPortMappings — publish the node's :80/:443 (where the ingress listens)
+#     to the Mac's localhost, so http://thyme.local reaches the controller.
+#
+# Recreate with:  kind delete cluster --name thyme
+#                 kind create cluster --name thyme --config k8s/kind-cluster.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: thyme
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 80
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 443
+        protocol: TCP

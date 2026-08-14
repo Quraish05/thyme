@@ -1,0 +1,18 @@
+# Stable in-cluster address for the backend pods. The frontend (Level 4) and the
+# Ingress (Level 5) route to `backend:8000`; the ClusterIP load-balances across
+# replicas if we scale up. Not exposed outside the cluster — only the Ingress is.
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: thyme
+  labels:
+    app: backend
+spec:
+  type: ClusterIP
+  selector:
+    app: backend
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

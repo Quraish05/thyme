@@ -1,0 +1,16 @@
+# Non-secret backend settings (app/core/config.py reads these from the env).
+# Split from the Secret so config you'd happily show anyone lives separately
+# from credentials. Both are injected together via envFrom on the Deployment.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: thyme
+data:
+  ENVIRONMENT: "development" # readable console logs in `kubectl logs`
+  LOG_LEVEL: "INFO"
+  PORT: "8000" # entrypoint.sh binds uvicorn to $PORT
+  AI_PROVIDER: "anthropic" # no key set → AI endpoints return 503 (fine here)
+  # config.py parses list[str] settings as JSON. Allow the Ingress host (Level 5)
+  # and local dev origin so the browser isn't blocked by CORS.
+  CORS_ORIGINS: '["http://thyme.local", "http://localhost:3000"]'
