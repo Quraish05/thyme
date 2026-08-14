@@ -145,6 +145,37 @@ Four decisions in five lines:
   container means nothing outside can reach it, and reading `$PORT` is what makes
   the same image portable across Render, Railway, Fly and a K8s pod.
 
+### Slimming the image: CPU-only `torch`
+
+That "expensive" dependency layer hides a trap worth calling out, because it's a
+general lesson about containers: **you ship everything your dependencies drag in,
+whether you use it or not.**
+
+`torch` (pulled in by `sentence-transformers` for journal embeddings) installs
+its **CUDA build by default** — ~2.9 GB of NVIDIA GPU libraries. There is no GPU
+on Render or in the kind sandbox, so every byte of it is dead weight. The first
+image weighed **10.8 GB**; `docker history` put 10.4 GB of that in the single
+`uv sync` layer, and `du` inside the image pinned 2.9 GB on `nvidia/*` alone.
+
+The fix routes `torch` to PyTorch's CPU wheel index, **scoped to Linux** so
+macOS/local dev resolves exactly as before ([backend/pyproject.toml](../../backend/pyproject.toml)):
+
+```toml
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true          # only packages that opt in (below) use this index
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+```
+
+`uv lock` then drops 15 `nvidia-*` packages plus `triton`, and Linux resolves
+`torch 2.13.0+cpu`. Result: **10.8 GB → 2.52 GB (−77 %)**. Because Render has no
+GPU either, the *production* image shrinks by the same ~8 GB — one of the rare
+sandbox lessons that pays off straight back in prod. It also makes the
+[sandbox's](14-kubernetes-sandbox.md) `kind load` step roughly 4× lighter.
+
 ---
 
 ## 16.3 The frontend image: three stages, one small runner

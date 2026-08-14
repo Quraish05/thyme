@@ -1,6 +1,6 @@
 # Chapter 17 — Kubernetes: a local learning sandbox
 
-**Last updated:** 2026-08-13 · **Status:** 🚧 in progress — Levels 1–2 built (cluster + database); Levels 3–6 planned
+**Last updated:** 2026-08-14 · **Status:** 🚧 in progress — Levels 1–5 built (cluster → database → backend → frontend → Ingress); Level 6 (Helm) planned
 
 > **This is not how Thyme is deployed.** Production stays exactly where it is:
 > frontend on Vercel, backend on Render, Postgres on Neon
@@ -50,8 +50,9 @@ The vocabulary, mapped to what we actually wrote:
 | **Service** | a stable name/address in front of pods | `postgres` (headless) |
 | **StatefulSet** | pods with *stable identity + own storage* | `postgres` → pod `postgres-0` |
 | **PVC** | a claim on durable disk, outliving the pod | `data-postgres-0` (auto-minted) |
-| Deployment | interchangeable, replaceable pods | Levels 3–4 (backend, frontend) |
-| Ingress | HTTP routing from outside the cluster | Level 5 |
+| **Deployment** | interchangeable, replaceable pods | `backend`, `frontend` |
+| **ConfigMap** | non-secret config, mountable as env | `backend-config` |
+| **Ingress** | HTTP routing from outside the cluster | `thyme.local` → frontend + `/api` → backend |
 
 ---
 
@@ -61,19 +62,21 @@ The vocabulary, mapped to what we actually wrote:
 |---|---|---|---|
 | 1 | Cluster | `kind create cluster --name thyme` | ✅ |
 | 2 | **Database** | Secret, headless Service, StatefulSet (+PVC) | ✅ |
-| 3 | **Backend** | Deployment, Service, ConfigMap/Secret, migrations on boot | 🚧 |
-| 4 | **Frontend** | Deployment, Service | 🚧 |
-| 5 | **Ingress** | `thyme.local` → frontend, `/api` → backend | 🚧 |
+| 3 | **Backend** | Deployment, Service, ConfigMap/Secret, migrations on boot | ✅ |
+| 4 | **Frontend** | Deployment, Service | ✅ |
+| 5 | **Ingress** | `thyme.local` → frontend, `/api` → backend | ✅ |
 | 6 | **Helm** | the same three tiers as a chart | 🚧 |
 
 Files: [k8s/README.md](../../k8s/README.md) (the runbook),
 [namespace.yaml](../../k8s/namespace.yaml),
-[database/postgres-secret.yaml](../../k8s/database/postgres-secret.yaml),
-[database/postgres-service.yaml](../../k8s/database/postgres-service.yaml),
-[database/postgres-statefulset.yaml](../../k8s/database/postgres-statefulset.yaml).
+[database/](../../k8s/database/) (Secret, Service, StatefulSet),
+[backend/](../../k8s/backend/) (ConfigMap, Secret, Deployment, Service),
+[frontend/](../../k8s/frontend/) (Deployment, Service),
+[ingress.yaml](../../k8s/ingress.yaml),
+[kind-cluster.yaml](../../k8s/kind-cluster.yaml).
 
 Level 5 isn't cosmetic — it's the level that *solves a real problem* we already
-know we have. See §17.5.
+know we have. See §17.8.
 
 ---
 
@@ -87,7 +90,7 @@ kubectl config current-context   # kind-thyme
 
 `kind` writes a kubeconfig context and switches to it. Two habits worth forming
 immediately: check `current-context` before running anything destructive, and
-remember that every command below needs `-n thyme` (§17.7).
+remember that every command below needs `-n thyme` (§17.10).
 
 Tearing down is the reason this is a safe place to experiment:
 
@@ -266,7 +269,181 @@ kubectl -n thyme exec -it postgres-0 -- psql -U thyme -d thyme -c '\conninfo'
 
 ---
 
-## 17.5 The tricky part — two things the manifests can't hide
+## 17.5 Level 3 — the backend
+
+The backend is a **Deployment**, not a StatefulSet: it holds no state (all of
+that lives in Postgres), so its pods are interchangeable and replaceable — which
+is exactly what a Deployment gives you. Its config splits along the line drawn in
+Level 2:
+
+```yaml
+envFrom:
+  - configMapRef: { name: backend-config }   # non-secret: env, CORS, PORT
+  - secretRef:    { name: backend-secret }    # DATABASE_URL, SECRET_KEY
+```
+
+The **ConfigMap vs Secret** split is the lesson: things you'd happily print in a
+log (`ENVIRONMENT`, `CORS_ORIGINS`, `PORT`) go in the ConfigMap; credentials go
+in the Secret. Both arrive as environment variables, so `app/core/config.py`
+never knows the difference.
+
+The one value that ties the tiers together is the connection string, pointing at
+the Level 2 Service by its DNS name — not a pod IP:
+
+```yaml
+DATABASE_URL: postgresql+asyncpg://thyme:thyme-dev-password@postgres:5432/thyme
+```
+
+`postgres` resolves to the headless Service from §17.4; `thyme`/`thyme-dev-password`
+are the same credentials declared once in `postgres-secret`.
+
+### Migrations on boot, and the probe that makes room for them
+
+The image's entrypoint runs `alembic upgrade head` *before* uvicorn starts
+([Ch 16 §16.2](13-containerization.md#the-entrypoint-migrate-then-exec)). On a
+fresh cluster that means the pod isn't answering HTTP for the first few seconds
+while it builds the whole schema (and runs `CREATE EXTENSION vector`). A
+**startup probe** buys that time without the liveness probe killing the pod
+mid-migration:
+
+```yaml
+startupProbe:                    # up to 30 × 5s = 150s for migrations
+  httpGet: { path: /api/v1/health, port: http }
+  periodSeconds: 5
+  failureThreshold: 30
+readinessProbe: { httpGet: { path: /api/v1/health, port: http }, periodSeconds: 10 }
+livenessProbe:  { httpGet: { path: /api/v1/health, port: http }, periodSeconds: 20 }
+```
+
+Once the startup probe passes, readiness and liveness take over — the three-probe
+pattern the app's own health split ([Ch 8](03-observability.md)) was built for.
+
+`imagePullPolicy: IfNotPresent` is mandatory here: the image was `kind load`ed,
+not pushed to a registry, so the kubelet must use the node-local copy instead of
+trying (and failing) to pull `thyme-backend:dev` from Docker Hub.
+
+### Bring it up
+
+```bash
+docker build -t thyme-backend:dev backend/
+kind load docker-image thyme-backend:dev --name thyme
+kubectl apply -f k8s/backend/
+kubectl -n thyme rollout status deployment/backend
+kubectl -n thyme exec deploy/backend -- \
+  python -c "import urllib.request as u; print(u.urlopen('http://localhost:8000/api/v1/health').read())"
+# → b'{"status":"ok","version":"0.1.0"}'  — and psql shows 15 tables + the vector extension
+```
+
+> **Watch it self-heal.** On first boot the backend often `CrashLoopBackOff`s a
+> few times: its entrypoint tries to migrate the instant it starts, which can be
+> *before* Postgres is accepting connections, so `alembic` fails and `set -e`
+> exits non-zero. Kubernetes restarts it, and once Postgres is ready the migration
+> succeeds. That's the declarative model doing its job — but the clean fix is an
+> **initContainer** that blocks on `pg_isready` before the app container runs, so
+> the restarts never happen (a listed future enhancement, and the same problem
+> [Ch 16 §16.6](13-containerization.md#166-gotchas) flags for multi-replica boots).
+
+---
+
+## 17.6 Level 4 — the frontend
+
+Level 4 is deliberately anticlimactic, and noticing *why* is the point. The
+frontend is stateless, so it's a plain Deployment + Service with no ConfigMap, no
+Secret, and no storage — everything interesting about it was already decided at
+**build** time (§17.8, and [Ch 16 §16.4](13-containerization.md#164-the-tricky-part--next_public_-is-baked-in-at-build-time)).
+
+```bash
+docker build --build-arg NEXT_PUBLIC_API_URL=http://thyme.local -t thyme-frontend:dev frontend/
+kind load docker-image thyme-frontend:dev --name thyme
+kubectl apply -f k8s/frontend/
+```
+
+The `--build-arg` is the whole story: the browser talks to the API, so the URL is
+compiled into the bundle now, pointing at the Ingress host we're about to create.
+The probes hit `/` (the standalone server answers it once up); resources are tiny.
+That's it — stateless tiers are easy, which is exactly what makes the database's
+complexity in Level 2 worth dwelling on.
+
+---
+
+## 17.7 Level 5 — the Ingress (and the payoff)
+
+This is the level that turns three separate Services into one app your browser can
+open, and it's the concrete fix to the build-time gotcha (§17.8).
+
+**First, the cluster needs a door.** A default `kind` cluster has no way for
+`localhost:80` to reach the Ingress controller, so Level 5 starts by *recreating*
+the cluster from a config that adds host port-mappings and the label the nginx
+controller schedules onto:
+
+```yaml
+# k8s/kind-cluster.yaml
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs: { node-labels: "ingress-ready=true" }
+    extraPortMappings:
+      - { containerPort: 80,  hostPort: 80 }
+      - { containerPort: 443, hostPort: 443 }
+```
+
+```bash
+kind delete cluster --name thyme
+kind create cluster --name thyme --config k8s/kind-cluster.yaml
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+kubectl wait -n ingress-nginx --for=condition=ready pod \
+  --selector=app.kubernetes.io/component=controller --timeout=150s
+```
+
+(Recreating is cheap — everything is declarative, so you just re-`kind load` the
+images and re-`apply` all the manifests afterward.)
+
+**Then the routing rule** is a single host with two paths — nginx matches the
+longest prefix, so `/api/v1/health` goes to the backend and everything else to the
+frontend:
+
+```yaml
+# k8s/ingress.yaml
+rules:
+  - host: thyme.local
+    http:
+      paths:
+        - { path: /api, pathType: Prefix, backend: { service: { name: backend,  port: { number: 8000 } } } }
+        - { path: /,    pathType: Prefix, backend: { service: { name: frontend, port: { number: 3000 } } } }
+```
+
+This is what makes the frontend's baked-in `NEXT_PUBLIC_API_URL=http://thyme.local`
+correct: the browser loads the page from `thyme.local` and calls the API on the
+*same* host, so the Ingress routes `/api` to the backend. No CORS, no in-cluster
+DNS in the browser — the gotcha §17.8 describes, dissolved.
+
+**Point the hostname at your machine** (once; needs `sudo`) and open it:
+
+```bash
+echo "127.0.0.1 thyme.local" | sudo tee -a /etc/hosts
+open http://thyme.local          # the Thyme login page, talking to the cluster
+```
+
+Verify the full path from the terminal without even editing `/etc/hosts`
+(`--resolve` fakes the DNS for one request):
+
+```bash
+curl --resolve thyme.local:80:127.0.0.1 http://thyme.local/api/v1/health
+# → {"status":"ok","version":"0.1.0"}     browser → Ingress → backend → Postgres
+curl --resolve thyme.local:80:127.0.0.1 http://thyme.local/
+# → HTML with <title>Thyme</title>        browser → Ingress → frontend
+```
+
+That's all three tiers — from Docker images — running in Kubernetes, reached the
+way a real user would. Everything after this (Level 6) is about *repeating* it
+with less typing.
+
+---
+
+## 17.8 The tricky part — two things the manifests can't hide
 
 ### 1 · Storage outlives almost everything
 
@@ -312,9 +489,10 @@ gotcha rather than memorise it.
 
 ---
 
-## 17.6 How to run, inspect and debug
+## 17.9 How to run, inspect and debug
 
-Level 2, from nothing:
+The full stack, from nothing, lives in [k8s/README.md](../../k8s/README.md); each
+level's bring-up is in §17.3–§17.7. The Level 2 core, as a reminder:
 
 ```bash
 kind create cluster --name thyme
@@ -361,12 +539,12 @@ kubelet will try to pull `thyme-backend:dev` from Docker Hub and fail.
 
 ---
 
-## 17.7 Gotchas
+## 17.10 Gotchas
 
 - **`-n thyme` on everything.** Without it you're querying `default` and
   everything looks empty. `kubectl config set-context --current --namespace=thyme`
   once, and stop typing it.
-- **Deleting a StatefulSet keeps its PVC** (§17.5). This is the single most
+- **Deleting a StatefulSet keeps its PVC** (§17.8). This is the single most
   confusing behaviour in Level 2.
 - **`POSTGRES_PASSWORD` only applies on first boot.** Changing the Secret does
   nothing to an initialised volume.
@@ -391,23 +569,19 @@ kubelet will try to pull `thyme-backend:dev` from Docker Hub and fail.
 
 ---
 
-## 17.8 Future enhancements
+## 17.11 Future enhancements
 
-The next four levels, each with the one idea it's meant to teach:
+Levels 1–5 are built (§17.3–§17.7). What's left:
 
-- **Level 3 — backend Deployment + Service:** ConfigMap vs Secret, and where
-  migrations belong. The entrypoint currently migrates on boot
-  ([Ch 16 §16.6](13-containerization.md#166-gotchas)), which is exactly the thing
-  a K8s `Job` or init container exists to fix once there's more than one replica.
-  Also: wire the app's own `/health` and `/health/ready` to real probes.
-- **Level 4 — frontend Deployment + Service:** trivial by comparison, and the
-  point is noticing *why* it's trivial (stateless, interchangeable, no storage).
-- **Level 5 — Ingress:** `thyme.local` + a `/etc/hosts` entry, the fix in §17.5.
-  Needs a `kind` cluster created with `extraPortMappings` and an ingress
-  controller (nginx).
-- **Level 6 — Helm:** only now, with three hand-written tiers to compare against,
-  templating earns its keep — values per environment, one `helm upgrade`, and a
-  real answer to "what would I have to repeat by hand?"
+- **Level 6 — Helm:** the next real step. Only now, with three hand-written tiers
+  to compare against, templating earns its keep — values per environment, one
+  `helm upgrade`, and a concrete answer to "what would I have to repeat by hand?"
+- **An init container for the backend** that blocks on `pg_isready` before the app
+  starts, so the boot-time `CrashLoopBackOff` (§17.5) never happens — the same fix
+  [Ch 16 §16.6](13-containerization.md#166-gotchas) wants for multi-replica boots.
+- **Pull from GHCR instead of `kind load`** — use the published images with an
+  `imagePullSecret`, to exercise a real registry pull rather than the offline
+  shortcut.
 
 Later, if the curiosity holds: an HPA (to watch autoscaling react), resource
 tuning under load, a backup `CronJob` for the PVC, and a `kustomize` overlay as a
