@@ -1,0 +1,48 @@
+# Frontend as a Deployment (stateless). The image was built with
+# NEXT_PUBLIC_API_URL=http://thyme.local baked in, so the browser calls the
+# backend through the same Ingress host. No runtime env needed — the public
+# vars are already compiled into the client bundle.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: thyme
+  labels:
+    app: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: thyme-frontend:dev
+          imagePullPolicy: IfNotPresent # kind-loaded, never pull
+          ports:
+            - name: http
+              containerPort: 3000
+          # The Next.js standalone server answers "/" once it's up; use it as a
+          # lightweight health signal.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              memory: "256Mi"
